@@ -21,6 +21,12 @@ https://github.com/z3256854313/EFT-Trainer-IL2CPP/releases/latest/download/EFT-T
 “下载并安装最新版”。下载器会读取最新 Release、校验 SHA-256、备份旧 DLL，
 再安装到 `BepInEx\plugins\TrainerIL2CPP`。
 
+也可以无界面安装：
+
+```powershell
+.\EFT-Trainer-Downloader.exe --install "E:\EFT"
+```
+
 下载器源码位于 [`Downloader`](Downloader/)。
 
 ## 当前状态

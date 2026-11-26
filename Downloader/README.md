@@ -25,4 +25,10 @@ dotnet publish .\Downloader\EFT-Trainer-Downloader.csproj `
 Downloader\bin\Release\net8.0-windows\win-x64\publish\EFT-Trainer-Downloader.exe
 ```
 
+无界面安装：
+
+```powershell
+.\EFT-Trainer-Downloader.exe --install "E:\EFT"
+```
+
 下载器不会下载或分发 EFT 游戏本体、BepInEx Interop 程序集、游戏源码或玩家配置。
