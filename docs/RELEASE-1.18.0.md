@@ -6,6 +6,18 @@
 
 ## 下载与安装
 
+推荐直接下载 Windows 下载器：
+
+```text
+EFT-Trainer-Downloader.exe
+```
+
+运行后选择 EFT / SPT 根目录，点击“下载并安装最新版”。下载器会自动校验、
+备份旧 DLL 并安装。
+
+也可以手动下载附件 `EFT-Trainer-Latest.zip` 或版本化附件
+`TrainerIL2CPP-1.18.0.zip`。
+
 下载附件 `TrainerIL2CPP-1.18.0.zip`，解压后得到：
 
 ```text

@@ -9,6 +9,20 @@
 > 仅在自建离线 SPT 环境中使用。不要在官方在线服务器使用修改后的客户端；
 > 这可能违反游戏规则并导致封禁。
 
+## 一键下载安装
+
+下载 Windows 下载器：
+
+```text
+https://github.com/z3256854313/EFT-Trainer-IL2CPP/releases/latest/download/EFT-Trainer-Downloader.exe
+```
+
+运行后选择包含 `EscapeFromTarkov.exe` 和 `BepInEx` 的 EFT / SPT 根目录，点击
+“下载并安装最新版”。下载器会读取最新 Release、校验 SHA-256、备份旧 DLL，
+再安装到 `BepInEx\plugins\TrainerIL2CPP`。
+
+下载器源码位于 [`Downloader`](Downloader/)。
+
 ## 当前状态
 
 - 插件名：`EFT Trainer IL2CPP`
