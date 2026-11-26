@@ -7,15 +7,20 @@ internal enum ExitCode
 	CompilationFailed = 2,
 	Canceled = 3,
 	PluginCompilationFailed = 4,
+	CompatibilityCheckFailed = 5,
 	Failure = 6,
+	RollbackFailed = 7,
 
 	CreateDllFailed = 10,
 	CreateOutlineFailed = 11,
 	CreateHarmonyDllFailed = 12,
 	CreatePluginDllFailed = 13,
+	CreateConfigurationFailed = 14,
 
 	RemoveDllFailed = 20,
 	RemoveOutlineFailed = 21,
 	RemoveHarmonyDllFailed = 22,
 	RemovePluginDllFailed = 23,
+
+	BackupNotFound = 30,
 }

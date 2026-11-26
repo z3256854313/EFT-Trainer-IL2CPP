@@ -13,6 +13,15 @@ using UnityEngine;
 
 namespace EFT.Trainer.Features;
 
+internal enum AimTargetPart
+{
+	Head,
+	Chest,
+	Stomach,
+	Arms,
+	Legs
+}
+
 [UsedImplicitly]
 internal class Aimbot : HoldFeature
 {
@@ -25,7 +34,16 @@ internal class Aimbot : HoldFeature
 	public float MaximumDistance { get; set; } = 200f;
 
 	[ConfigurationProperty(Order = 11)]
-	public float Smoothness { get; set; } = 0.085f;
+	public float Smoothness { get; set; } = 0.35f;
+
+	[ConfigurationProperty(Order = 12)]
+	public AimTargetPart TargetPart { get; set; } = AimTargetPart.Head;
+
+	[ConfigurationProperty(Order = 13)]
+	public bool PreferHeadChest { get; set; } = true;
+
+	[ConfigurationProperty(Order = 14)]
+	public bool VisibleOnly { get; set; } = true;
 
 	[ConfigurationProperty(Order = 15)]
 	public bool ElevationAdjustment { get; set; } = true;
@@ -56,7 +74,7 @@ internal class Aimbot : HoldFeature
 	protected static bool CreateShotPrefix(object ammo, Vector3 origin, ref Vector3 direction, int fireIndex, string player, Item weapon, ref float speedFactor, int fragmentIndex)
 	{
 		var feature = FeatureFactory.GetFeature<Aimbot>();
-		if (feature == null || !feature.SilentAim || feature._silentAimTarget == null)
+		if (feature == null || !feature.SilentAim || !feature._hasSilentAimTarget)
 			return true; // keep using original code, we are not enabled
 
 		var world = Singleton<GameWorld>.Instance;
@@ -70,7 +88,7 @@ internal class Aimbot : HoldFeature
 		if (!localPlayer.IsYourPlayer)
 			return true; // keep using original code, not our player
 
-		direction = (feature._silentAimTarget.position - origin).normalized;
+		direction = (feature._silentAimTargetPosition - origin).normalized;
 		speedFactor = feature.SilentAimSpeedFactor;
 
 		return true; // call the original code with updated direction and speedFactor
@@ -81,7 +99,7 @@ internal class Aimbot : HoldFeature
 	protected static bool ApplyShotPrefix(DamageInfoStruct damageInfo, EBodyPart bodyPartType, EBodyPartColliderType colliderType, EArmorPlateCollider armorPlateCollider, object shotId, Player? __instance)
 	{
 		var feature = FeatureFactory.GetFeature<Aimbot>();
-		if (feature == null || !feature.SilentAim || feature._silentAimTarget == null)
+		if (feature == null || !feature.SilentAim || !feature._hasSilentAimTarget)
 			return true; // keep using original code, we are not enabled
 
 		if (damageInfo.Player?.iPlayer is { IsYourPlayer: true } && __instance is { IsYourPlayer: true })
@@ -114,7 +132,8 @@ internal class Aimbot : HoldFeature
 
 #pragma warning restore IDE0060
 
-	private Transform? _silentAimTarget = null;
+	private bool _hasSilentAimTarget = false;
+	private Vector3 _silentAimTargetPosition = Vector3.zero;
 	private float _silentAimNextShotTime = 0f;
 	protected override void Update()
 	{
@@ -130,9 +149,9 @@ internal class Aimbot : HoldFeature
 			HarmonyPrefix(harmony, typeof(Weapon), nameof(Weapon.CreateOpticCalibrationData), nameof(CreateOpticCalibrationDataPrefix));
 		});
 
-		_silentAimTarget = null;
+		_hasSilentAimTarget = false;
 
-		if (!TryGetNearestTarget(out var player, out var camera, out var nearestTarget))
+		if (!TryGetNearestTarget(out var player, out var camera, out var targetPosition, out _))
 			return;
 
 		if (player.IsInventoryOpened)
@@ -141,10 +160,8 @@ internal class Aimbot : HoldFeature
 		if (player.HandsController is not Player.FirearmController controller)
 			return;
 
-		if (!camera.IsTransformVisible(nearestTarget))
-			return;
-
-		_silentAimTarget = nearestTarget;
+		_hasSilentAimTarget = true;
+		_silentAimTargetPosition = targetPosition;
 
 		if (_silentAimNextShotTime > Time.time)
 			return;
@@ -156,18 +173,24 @@ internal class Aimbot : HoldFeature
 
 	protected override void UpdateWhenHold()
 	{
-		if (!TryGetNearestTarget(out var player, out _, out var nearestTarget))
+		if (!TryGetNearestTarget(out var player, out _, out var targetPosition, out _))
 			return;
 
-		AimAtPosition(player, nearestTarget.position, Smoothness);
+		AimAtPosition(player, targetPosition, Smoothness);
 	}
 
-	private bool TryGetNearestTarget([NotNullWhen(true)] out Player? localPlayer, [NotNullWhen(true)] out Camera? camera, [NotNullWhen(true)] out Transform? nearestTarget)
+	private bool TryGetNearestTarget(
+		[NotNullWhen(true)] out Player? localPlayer,
+		[NotNullWhen(true)] out Camera? camera,
+		out Vector3 nearestTargetPosition,
+		out AimTargetPart nearestTargetPart)
 	{
 		localPlayer = null;
 		camera = null;
-		nearestTarget = null;
+		nearestTargetPosition = Vector3.zero;
+		nearestTargetPart = TargetPart;
 		var nearestTargetDistance = float.MaxValue;
+		var nearestTargetPriority = int.MaxValue;
 
 		var state = GameState.Current;
 		if (state == null)
@@ -196,33 +219,64 @@ internal class Aimbot : HoldFeature
 			if (!hostile.IsAlive())
 				continue;
 
-			if (!TryGetHeadTransform(hostile, out var hostileTransform))
-				continue;
+			if (PreferHeadChest)
+			{
+				TryEvaluateTarget(hostile, AimTargetPart.Head, 0, camera, template, ref nearestTargetDistance, ref nearestTargetPriority, ref nearestTargetPosition);
+				TryEvaluateTarget(hostile, AimTargetPart.Chest, 1, camera, template, ref nearestTargetDistance, ref nearestTargetPriority, ref nearestTargetPosition);
+			}
 
-			var destination = hostileTransform.position;
-			var screenPosition = camera.WorldPointToVisibleScreenPoint(destination);
-			if (screenPosition == Vector2.zero)
-				continue;
-
-			if (!IsInFieldOfView(screenPosition))
-				continue;
-
-			var distance = Vector3.Distance(camera.transform.position, destination);
-			if (distance > MaximumDistance)
-				continue;
-
-			if (distance >= nearestTargetDistance)
-				continue;
-
-			nearestTargetDistance = distance;
-			var travelTime = distance / template.InitialSpeed;
-			destination.x += hostile.Velocity.x * travelTime;
-			destination.y += hostile.Velocity.y * travelTime;
-
-			nearestTarget = hostileTransform;
+			var selectedPriority = PreferHeadChest && TargetPart is not (AimTargetPart.Head or AimTargetPart.Chest) ? 2 : 0;
+			TryEvaluateTarget(hostile, TargetPart, selectedPriority, camera, template, ref nearestTargetDistance, ref nearestTargetPriority, ref nearestTargetPosition);
 		}
 
-		return nearestTarget != null;
+		nearestTargetPart = PreferHeadChest
+			? nearestTargetPriority switch
+			{
+				0 => AimTargetPart.Head,
+				1 => AimTargetPart.Chest,
+				_ => TargetPart
+			}
+			: TargetPart;
+		return nearestTargetPriority != int.MaxValue;
+	}
+
+	private bool TryEvaluateTarget(
+		Player hostile,
+		AimTargetPart part,
+		int priority,
+		Camera camera,
+		AmmoTemplate template,
+		ref float nearestDistance,
+		ref int nearestPriority,
+		ref Vector3 nearestPosition)
+	{
+		if (!TryGetTargetTransform(hostile, part, camera, out var targetTransform))
+			return false;
+
+		var destination = targetTransform.position;
+		if (VisibleOnly && !camera.IsTransformVisible(targetTransform))
+			return false;
+
+		var screenPosition = camera.WorldPointToVisibleScreenPoint(destination);
+		if (screenPosition == Vector2.zero || !IsInFieldOfView(screenPosition))
+			return false;
+
+		var distance = Vector3.Distance(camera.transform.position, destination);
+		if (distance > MaximumDistance)
+			return false;
+
+		if (priority > nearestPriority || (priority == nearestPriority && distance >= nearestDistance))
+			return false;
+
+		nearestDistance = distance;
+		nearestPriority = priority;
+
+		var travelTime = distance / Mathf.Max(template.InitialSpeed, 0.01f);
+		nearestPosition = new Vector3(
+			destination.x + hostile.Velocity.x * travelTime,
+			destination.y + hostile.Velocity.y * travelTime,
+			destination.z);
+		return true;
 	}
 
 	[UsedImplicitly]
@@ -262,7 +316,7 @@ internal class Aimbot : HoldFeature
 			euler.x -= 360f;
 
 		var playerRotation = player.MovementContext.Rotation;
-		var smoothAngle = GetSmoothAngle(playerRotation, new Vector2(euler.y, euler.x), smoothness);
+		var smoothAngle = GetSmoothAngle(playerRotation, new Vector2(euler.y, euler.x), Mathf.Clamp01(smoothness));
 		player.MovementContext.Rotation = smoothAngle;
 	}
 
@@ -294,7 +348,11 @@ internal class Aimbot : HoldFeature
 		angle = new Vector2(newX, newY);
 	}
 
-	private static bool TryGetHeadTransform(Player player, [NotNullWhen(true)] out Transform? transform)
+	private bool TryGetTargetTransform(
+		Player player,
+		AimTargetPart targetPart,
+		Camera camera,
+		[NotNullWhen(true)] out Transform? transform)
 	{
 		transform = null;
 
@@ -302,7 +360,46 @@ internal class Aimbot : HoldFeature
 		if (bones == null)
 			return false;
 
-		transform = bones.Head.Original;
-		return true;
+		transform = targetPart switch
+		{
+			AimTargetPart.Head => bones.Head.Original,
+			AimTargetPart.Chest => bones.Ribcage.Original,
+			AimTargetPart.Stomach => bones.Spine1,
+			AimTargetPart.Arms => GetBestLimbTransform(camera, bones.Upperarms[0], bones.Upperarms[1]),
+			AimTargetPart.Legs => GetBestLimbTransform(camera, bones.LeftThigh2.Original, bones.RightThigh2.Original),
+			_ => null
+		};
+
+		return transform != null;
+	}
+
+	private Transform? GetBestLimbTransform(Camera camera, Transform? left, Transform? right)
+	{
+		if (VisibleOnly)
+		{
+			var leftVisible = left != null && camera.IsTransformVisible(left);
+			var rightVisible = right != null && camera.IsTransformVisible(right);
+			if (leftVisible && rightVisible)
+				return GetCloserTransform(camera, left, right);
+			if (leftVisible)
+				return left;
+			if (rightVisible)
+				return right;
+		}
+
+		if (left == null)
+			return right;
+		if (right == null)
+			return left;
+
+		return GetCloserTransform(camera, left, right);
+	}
+
+	private static Transform GetCloserTransform(Camera camera, Transform left, Transform right)
+	{
+		var origin = camera.transform.position;
+		return Vector3.SqrMagnitude(left.position - origin) <= Vector3.SqrMagnitude(right.position - origin)
+			? left
+			: right;
 	}
 }

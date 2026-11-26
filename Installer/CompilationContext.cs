@@ -16,4 +16,8 @@ internal class CompilationContext(Installation installation, string projectTitle
 	public ZipArchive? Archive { get; set; }
 	public bool IsFatalFailure { get; set; } = false;
 	public string Language { get; set; } = "";
+	public string? SourcePath { get; set; }
+	public bool Offline { get; set; }
+	public bool RefreshSource { get; set; }
+	public string? CacheDirectory { get; set; }
 }

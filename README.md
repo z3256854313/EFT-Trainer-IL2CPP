@@ -1,25 +1,64 @@
+# EFT Trainer IL2CPP
 
-# EscapeFromTarkov-Trainer
+This repository is a maintained IL2CPP fork of
+[sailro/EscapeFromTarkov-Trainer](https://github.com/sailro/EscapeFromTarkov-Trainer).
+The current Windows plugin target is `TrainerIL2CPP 1.18.0` for a matching
+offline SPT / EFT environment.
 
-[![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-lightgrey?logo=github&style=flat-square)](https://github.com/sponsors/sailro)
+> Use this project only with a self-hosted offline SPT installation. Do not use
+> it on official online servers. BattlEye and Battlestate Games may ban accounts
+> that use modified clients.
 
-# This project has been discontinued
-> After 5 years of proud service, this project has been discontinued. With the release of version 1.0 and, above all, the switch to IL2CPP technology, internal modding is going to be completely different (and much more complex).
-> It has been really interesting to find techniques for modding the game, compiling on the go and allowing features to be added easily. Thanks !
+The original upstream project is discontinued, but this fork contains the newer
+IL2CPP plugin, installer changes, configuration editor, Chinese in-game UI, and
+the fixes documented in [docs/IL2CPP-PLUGIN.md](docs/IL2CPP-PLUGIN.md).
 
-*I'm not responsible for any consequences that result from using this code. BattleState / BattlEye will ban you if you try to use it 'live'. Use it safely offline with [SPT](https://sp-tarkov.com/).*
+## Install
 
-***TLDR => Use the [Universal Installer](https://github.com/sailro/EscapeFromTarkov-Trainer/releases).*** Default key for in-game GUI is `Right-Alt`.
+1. Install BepInEx for IL2CPP matching your EFT version and run SPT once.
+2. Fully close the game, SPT server, and launcher.
+3. Copy `TrainerIL2CPP.dll` into:
 
-`master` branch can build against `EFT 0.16.9.40087` (tested with [`SPT Version 4.0.4`](https://hub.sp-tarkov.com/files/file/16-spt/#versions)). If you are looking for another version, see [`branches`](https://github.com/sailro/EscapeFromTarkov-Trainer/branches) and [`releases`](https://github.com/sailro/EscapeFromTarkov-Trainer/releases).
+   ```text
+   <EFT_ROOT>\BepInEx\plugins\TrainerIL2CPP\TrainerIL2CPP.dll
+   ```
 
-> If you want to compile the code yourself, make sure you cleaned-up your solution properly after upgrading your EFT/sptarkov bits (even removing `bin` and `obj` folders) and check all your references.
+4. Start the game through the normal SPT launch flow.
+5. Press `Right Alt` to open the panel.
 
-> If you are using `SPT`, please make sure you have run the game at least once before compiling/installing the trainer. `SPT` is patching binaries during the first run, and we need to compile against those patched binaries.
+The settings file is created automatically at:
 
-> The typical issue when something is out of sync is that the game will freeze at the startup screen with type/tokens errors in `%LOCALAPPDATA%Low\Battlestate Games\EscapeFromTarkov\Player.log`
+```text
+<EFT_ROOT>\BepInEx\config\com.local.efttrainer.il2cpp.cfg
+```
 
-## Features
+## Build
+
+The repository does not redistribute EFT, BepInEx interop assemblies, or
+extracted game code. Set `EFT_ROOT` to the installation that contains
+`BepInEx\interop` and `BepInEx\core`, then build:
+
+```powershell
+$env:EFT_ROOT = "E:\EFT"
+dotnet build .\IL2CPPPlugin\TrainerIL2CPP.csproj -c Release
+```
+
+The plugin output is written under:
+
+```text
+IL2CPPPlugin\bin\Release\net10.0\TrainerIL2CPP.dll
+```
+
+Run SPT at least once before building so BepInEx has generated the matching
+interop assemblies.
+
+## License
+
+The original project is MIT licensed. See [LICENSE](LICENSE). Upstream
+copyright and attribution remain with Sebastien Lebreton and the original
+contributors.
+
+## Upstream feature catalog
 
 | trainer.ini section       | GUI/console  | Description |
 |---------------------------|--------------|-------------|

@@ -79,6 +79,15 @@ internal class Players : ToggleFeature
 	[ConfigurationProperty(Order = 21)]
 	public float BoxThickness { get; set; } = 2f;
 
+	[ConfigurationProperty(Order = 22)]
+	public float BoxPadding { get; set; } = 0.08f;
+
+	[ConfigurationProperty(Order = 23)]
+	public bool UseRendererBounds { get; set; } = true;
+
+	[ConfigurationProperty(Order = 24)]
+	public bool ClampBoxToScope { get; set; } = true;
+
 	[ConfigurationProperty(Order = 30)]
 	public bool ShowCharms { get; set; } = true;
 
@@ -86,7 +95,7 @@ internal class Players : ToggleFeature
 	public bool XRayVision { get; set; } = true;
 
 	[ConfigurationProperty(Order = 40)]
-	public bool ShowInfos { get; set; } = true;
+	public bool ShowInfos { get; set; } = false;
 
 	[ConfigurationProperty(Order = 50)]
 	public bool ShowSkeletons { get; set; } = false;
@@ -175,14 +184,7 @@ internal class Players : ToggleFeature
 			if (playerBones == null)
 				continue;
 
-			var headScreenPosition = isAiming
-				? ScopePointToScreenPoint(camera, playerBones.Head.position)
-				: camera.WorldPointToVisibleScreenPoint(playerBones.Head.position);
-			var leftShoulderScreenPosition = isAiming
-				? ScopePointToScreenPoint(camera, playerBones.LeftShoulder.position)
-				: camera.WorldPointToVisibleScreenPoint(playerBones.LeftShoulder.position);
-
-			if (headScreenPosition == Vector2.zero || leftShoulderScreenPosition == Vector2.zero)
+			if (!TryGetPlayerScreenBox(ennemy, camera, isAiming, out var playerBox))
 				continue;
 
 			if (ShowShootable)
@@ -211,16 +213,8 @@ internal class Players : ToggleFeature
 			else if (ShowSkeletons)
 				Bones.RenderBones(ennemy, SkeletonThickness, playerColors.Color, camera, isAiming, distance);
 
-			var heightOffset = Mathf.Abs(headScreenPosition.y - leftShoulderScreenPosition.y);
-
-			var boxHeight = Mathf.Abs(headScreenPosition.y - screenPosition.y) + heightOffset * 3f;
-			var boxWidth = boxHeight * 0.62f;
-
-			var boxPositionX = screenPosition.x - boxWidth / 2f;
-			var boxPositionY = headScreenPosition.y - heightOffset * 2f;
-
 			if (ShowBoxes)
-				Render.DrawBox(boxPositionX, boxPositionY, boxWidth, boxHeight, BoxThickness, borderColor);
+				Render.DrawBox(playerBox.x, playerBox.y, playerBox.width, playerBox.height, BoxThickness, borderColor);
 
 			var ennemyHealthController = ennemy.HealthController;
 			var ennemyHandController = ennemy.HandsController;
@@ -236,8 +230,104 @@ internal class Players : ToggleFeature
 			var distanceText = string.Format(Strings.FeaturePointOfInterestsDistanceFormat, distance);
 			var infoText = string.Format(Strings.FeaturePlayersFormat, weaponText, Mathf.Round(currentPlayerHealth * 100 / maximumPlayerHealth), distanceText).Trim();
 
-			Render.DrawString(new Vector2(boxPositionX, boxPositionY - 20f), infoText, playerColors.InfoColor, false);
+			Render.DrawString(new Vector2(playerBox.x, playerBox.y - 20f), infoText, playerColors.InfoColor, false);
 		}
+	}
+
+	private bool TryGetPlayerScreenBox(Player player, Camera camera, bool isAiming, out Rect box)
+	{
+		box = default;
+		var minimum = new Vector2(float.MaxValue, float.MaxValue);
+		var maximum = new Vector2(float.MinValue, float.MinValue);
+		var points = 0;
+
+		void Consider(Vector3 worldPoint)
+		{
+			var screenPoint = isAiming
+				? ScopePointToScreenPointRaw(camera, worldPoint)
+				: camera.WorldPointToScreenPoint(worldPoint);
+			if (screenPoint == Vector2.zero)
+				return;
+
+			minimum = Vector2.Min(minimum, screenPoint);
+			maximum = Vector2.Max(maximum, screenPoint);
+			points++;
+		}
+
+		if (UseRendererBounds && player.PlayerBody?.BodySkins is { } skins)
+		{
+			foreach (var skin in skins.Values)
+			{
+				if (skin == null)
+					continue;
+
+				foreach (var renderer in skin.GetRenderers())
+				{
+					if (renderer == null)
+						continue;
+
+					var bounds = renderer.localBounds;
+					var min = bounds.min;
+					var max = bounds.max;
+					for (var x = 0; x < 2; x++)
+					{
+						for (var y = 0; y < 2; y++)
+						{
+							for (var z = 0; z < 2; z++)
+							{
+								Consider(renderer.transform.TransformPoint(new Vector3(
+									x == 0 ? min.x : max.x,
+									y == 0 ? min.y : max.y,
+									z == 0 ? min.z : max.z)));
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if (points == 0 && player.PlayerBones is { } bones)
+		{
+			Consider(bones.Head.Original.position);
+			Consider(bones.Ribcage.Original.position);
+			Consider(bones.Spine1.position);
+			Consider(bones.Pelvis.Original.position);
+			Consider(bones.Upperarms[0].position);
+			Consider(bones.Upperarms[1].position);
+			Consider(bones.LeftThigh2.Original.position);
+			Consider(bones.RightThigh2.Original.position);
+			Consider(player.Transform.position);
+		}
+
+		if (points == 0)
+			return false;
+
+		box = Rect.MinMaxRect(minimum.x, minimum.y, maximum.x, maximum.y);
+		var padding = Mathf.Clamp(BoxPadding, 0f, 0.5f) * Mathf.Min(box.width, box.height);
+		box = new Rect(
+			box.x - padding,
+			box.y - padding,
+			box.width + padding * 2f,
+			box.height + padding * 2f);
+
+		if (isAiming && ClampBoxToScope && _scopeParameters.radius > 0f)
+		{
+			var scopeBounds = Rect.MinMaxRect(
+				_scopeParameters.center.x - _scopeParameters.radius,
+				_scopeParameters.center.y - _scopeParameters.radius,
+				_scopeParameters.center.x + _scopeParameters.radius,
+				_scopeParameters.center.y + _scopeParameters.radius);
+			var xMin = Mathf.Max(box.xMin, scopeBounds.xMin);
+			var yMin = Mathf.Max(box.yMin, scopeBounds.yMin);
+			var xMax = Mathf.Min(box.xMax, scopeBounds.xMax);
+			var yMax = Mathf.Min(box.yMax, scopeBounds.yMax);
+			if (xMax <= xMin || yMax <= yMin)
+				return false;
+
+			box = Rect.MinMaxRect(xMin, yMin, xMax, yMax);
+		}
+
+		return box.width >= 1f && box.height >= 1f;
 	}
 
 	private static (Transform transform, string[] bones)[] GetBonesToCheck(PlayerBones playerBones)
@@ -407,9 +497,9 @@ internal class Players : ToggleFeature
 		if (_opticCamera == null || !GetCameraOffset(camera, out var scale, out var cameraOffset))
 			return camera.WorldPointToScreenPoint(worldPoint);
 
-		var scopePoint = (Vector2)_opticCamera.WorldToScreenPoint(worldPoint) + cameraOffset;
-		scopePoint.y = Screen.height - scopePoint.y * scale;
-		scopePoint.x *= scale;
+		var scopePoint = ScopePointToScreenPointRaw(camera, worldPoint);
+		if (scopePoint == Vector2.zero)
+			return Vector2.zero;
 
 		if (clamp)
 			return ClampPointToScope(scopePoint);
@@ -419,6 +509,21 @@ internal class Players : ToggleFeature
 			return scopePoint;
 
 		return Vector2.zero;
+	}
+
+	private static Vector2 ScopePointToScreenPointRaw(Camera camera, Vector3 worldPoint)
+	{
+		if (_opticCamera == null || !GetCameraOffset(camera, out var scale, out var cameraOffset))
+			return camera.WorldPointToScreenPoint(worldPoint);
+
+		var opticScreenPoint = _opticCamera.WorldToScreenPoint(worldPoint);
+		if (opticScreenPoint.z <= 0.01f)
+			return Vector2.zero;
+
+		var scopePoint = (Vector2)opticScreenPoint + cameraOffset;
+		scopePoint.y = Screen.height - scopePoint.y * scale;
+		scopePoint.x *= scale;
+		return scopePoint;
 	}
 
 	private static bool GetCameraOffset(Camera camera, out float scale, out Vector2 cameraOffset)

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
@@ -18,6 +18,14 @@ internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
 		[Description("Path to EFT.")]
 		[CommandArgument(0, "[path]")]
 		public string? Path { get; set; }
+
+		[Description("Only show files that would be removed.")]
+		[CommandOption("--dry-run")]
+		public bool DryRun { get; set; }
+
+		[Description("Skip interactive confirmation.")]
+		[CommandOption("-y|--yes")]
+		public bool Yes { get; set; }
 	}
 
 	[SupportedOSPlatform("windows")]
@@ -28,37 +36,67 @@ internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
 			AnsiConsole.MarkupLine("-=[[ [cyan]EscapeFromTarkov-Trainer Universal Installer[/] - [blue]https://github.com/sailro [/]]]=-");
 			AnsiConsole.WriteLine();
 
-			var installation = Installation.GetTargetInstallation(settings.Path, "Please select from where to uninstall the trainer");
+			var installation = Installation.GetTargetInstallation(
+				settings.Path,
+				"Please select from where to uninstall the trainer",
+				confirm: !settings.Yes);
 			if (installation == null)
 				return (int)ExitCode.NoInstallationFound;
 
 			AnsiConsole.MarkupLine($"Target [green]EscapeFromTarkov ({installation.Version})[/] in [blue]{installation.Location.EscapeMarkup()}[/].");
-
-			if (!RemoveFile(Path.Combine(installation.Managed, "NLog.EFT.Trainer.dll")))
-				return (int)ExitCode.RemoveDllFailed;
-
-			// MonoMod.RuntimeDetour is a dependency used by the non-ilmerged 0Harmony.dll used by legacy spt. In this case we are not handling the removal
-			if (!File.Exists(Path.Combine(installation.Managed, "MonoMod.RuntimeDetour.dll")))
+			if (settings.DryRun)
 			{
-				if (!RemoveFile(Path.Combine(installation.Managed, "0Harmony.dll")))
-					return (int)ExitCode.RemoveHarmonyDllFailed;
+				foreach (var file in BackupManager.GetManagedFiles(installation))
+					AnsiConsole.MarkupLine($"[grey]Would inspect/remove[/] {file.EscapeMarkup()}");
+
+				AnsiConsole.MarkupLine("[green]Uninstall dry run completed. No files were changed.[/]");
+				return (int)ExitCode.Success;
 			}
 
-			if (!RemoveFile(Path.Combine(installation.Data, "outline")))
-				return (int)ExitCode.RemoveOutlineFailed;
+			if (!settings.Yes && !AnsiConsole.Confirm("Uninstall the trainer files?"))
+				return (int)ExitCode.Canceled;
 
-			if (!RemoveFile(Path.Combine(installation.BepInExPlugins, "spt-efttrainer.dll")))
-				return (int)ExitCode.RemovePluginDllFailed;
+			var backupDirectory = BackupManager.Create(installation);
+			var result = RemoveTrainerFiles(installation);
+			if (result != ExitCode.Success)
+			{
+				AnsiConsole.MarkupLine("[yellow]Uninstall failed; restoring the pre-uninstall backup.[/]");
+				BackupManager.Rollback(installation, backupDirectory, dryRun: false);
+				AnsiConsole.MarkupLine("[green]Automatic rollback completed.[/]");
+				return (int)result;
+			}
 
-			RemoveOrPatchConfiguration(installation);
+			AnsiConsole.MarkupLine("[green]Uninstall completed successfully.[/]");
+			AnsiConsole.MarkupLine(
+				$"[blue]Restore command:[/] Installer.exe rollback \"{installation.Location}\" --backup \"{backupDirectory}\"");
+			return (int)ExitCode.Success;
 		}
-		catch (Exception ex)
+		catch (Exception exception)
 		{
-			AnsiConsole.MarkupLine($"[red]Error: {ex.Message.EscapeMarkup()}. Please file an issue here : https://github.com/sailro/EscapeFromTarkov-Trainer/issues [/]");
+			AnsiConsole.MarkupLine($"[red]Error:[/] {exception.Message.EscapeMarkup()}");
+			InstallerLog.Current?.WriteException(exception);
 			return (int)ExitCode.Failure;
 		}
+	}
 
-		return (int)ExitCode.Success;
+	private static ExitCode RemoveTrainerFiles(Installation installation)
+	{
+		if (!RemoveFile(Path.Combine(installation.Managed, "NLog.EFT.Trainer.dll")))
+			return ExitCode.RemoveDllFailed;
+
+		if (!File.Exists(Path.Combine(installation.Managed, "MonoMod.RuntimeDetour.dll")) &&
+			!RemoveFile(Path.Combine(installation.Managed, "0Harmony.dll")))
+			return ExitCode.RemoveHarmonyDllFailed;
+
+		if (!RemoveFile(Path.Combine(installation.Data, "outline")))
+			return ExitCode.RemoveOutlineFailed;
+
+		if (!RemoveFile(Path.Combine(installation.BepInExPlugins, "spt-efttrainer.dll")))
+			return ExitCode.RemovePluginDllFailed;
+
+		return RemoveOrPatchConfiguration(installation)
+			? ExitCode.Success
+			: ExitCode.RemoveDllFailed;
 	}
 
 	private static bool RemoveFile(string filename)
@@ -67,24 +105,24 @@ internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
 		{
 			if (!File.Exists(filename))
 			{
-				AnsiConsole.MarkupLine($"No [green]{Path.GetFileName(filename).EscapeMarkup()}[/] in [blue]{Path.GetDirectoryName(filename).EscapeMarkup()}[/].");
+				AnsiConsole.MarkupLine($"No [green]{Path.GetFileName(filename).EscapeMarkup()}[/] to remove.");
 			}
 			else
 			{
 				File.Delete(filename);
-				AnsiConsole.MarkupLine($"Removed [green]{Path.GetFileName(filename).EscapeMarkup()}[/] in [blue]{Path.GetDirectoryName(filename).EscapeMarkup()}[/].");
+				AnsiConsole.MarkupLine($"Removed [green]{Path.GetFileName(filename).EscapeMarkup()}[/].");
 			}
 
 			return true;
 		}
-		catch (Exception ex)
+		catch (Exception exception)
 		{
-			AnsiConsole.MarkupLine($"[red]Unable to remove {filename.EscapeMarkup()}: {ex.Message.EscapeMarkup()} [/]");
+			AnsiConsole.MarkupLine($"[red]Unable to remove {filename.EscapeMarkup()}: {exception.Message.EscapeMarkup()}[/]");
 			return false;
 		}
 	}
 
-	private static void RemoveOrPatchConfiguration(Installation installation)
+	private static bool RemoveOrPatchConfiguration(Installation installation)
 	{
 		const string targetName = "EFTTarget";
 		var configPath = Path.Combine(installation.Managed, "NLog.dll.nlog");
@@ -92,33 +130,32 @@ internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
 		{
 			if (!File.Exists(configPath))
 			{
-				// Only for display
-				RemoveFile(configPath);
-				return;
+				AnsiConsole.MarkupLine("No [green]NLog.dll.nlog[/] to restore.");
+				return true;
 			}
 
-			var doc = new XmlDocument();
-			doc.Load(configPath);
-
-			var nlogNode = doc.DocumentElement;
+			var document = new XmlDocument();
+			document.Load(configPath);
+			var nlogNode = document.DocumentElement;
 			var targetsNode = nlogNode?.FirstChild;
-
 			if (nlogNode is not { Name: "nlog" } || targetsNode is not { Name: "targets" })
 			{
-				AnsiConsole.MarkupLine($"[red]Unable to unpatch {configPath.EscapeMarkup()}, unexpected xml structure.[/]");
-				return;
+				AnsiConsole.MarkupLine($"[red]Unable to unpatch {configPath.EscapeMarkup()}: unexpected XML structure.[/]");
+				return false;
 			}
 
 			var removeNodes = targetsNode
 				.ChildNodes
 				.Cast<XmlNode>()
-				.Where(targetNode => targetNode.Attributes?["name"]?.Value == targetName && targetNode.Attributes?["xsi:type"]?.Value == targetName)
+				.Where(targetNode =>
+					targetNode.Attributes?["name"]?.Value == targetName &&
+					targetNode.Attributes?["xsi:type"]?.Value == targetName)
 				.ToList();
 
 			if (removeNodes.Count == 0)
 			{
-				AnsiConsole.MarkupLine($"Not patched [green]{Path.GetFileName(configPath).EscapeMarkup()}[/] in [blue]{Path.GetDirectoryName(configPath).EscapeMarkup()}[/].");
-				return;
+				AnsiConsole.MarkupLine("NLog configuration was not patched by this installer.");
+				return true;
 			}
 
 			foreach (var target in removeNodes)
@@ -128,20 +165,22 @@ internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
 			{
 				var builder = new StringBuilder();
 				using var writer = new UTF8StringWriter(builder);
-				doc.Save(writer);
-				builder.Replace(" xmlns=\"\"", string.Empty);
-				File.WriteAllText(configPath, builder.ToString());
-
-				AnsiConsole.MarkupLine($"Unpatched [green]{Path.GetFileName(configPath).EscapeMarkup()}[/] in [blue]{Path.GetDirectoryName(configPath).EscapeMarkup()}[/].");
+				document.Save(writer);
+				File.WriteAllText(configPath, builder.ToString().Replace(" xmlns=\"\"", string.Empty));
+				AnsiConsole.MarkupLine("Unpatched [green]NLog.dll.nlog[/].");
 			}
 			else
 			{
-				RemoveFile(configPath);
+				File.Delete(configPath);
+				AnsiConsole.MarkupLine("Removed [green]NLog.dll.nlog[/].");
 			}
+
+			return true;
 		}
-		catch (Exception ex)
+		catch (Exception exception)
 		{
-			AnsiConsole.MarkupLine($"[red]Unable to unpatch or remove {configPath.EscapeMarkup()}: {ex.Message.EscapeMarkup()}.[/]");
+			AnsiConsole.MarkupLine($"[red]Unable to unpatch or remove {configPath.EscapeMarkup()}: {exception.Message.EscapeMarkup()}[/]");
+			return false;
 		}
 	}
 }

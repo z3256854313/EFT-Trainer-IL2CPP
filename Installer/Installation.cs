@@ -16,6 +16,9 @@ internal class Installation
 	public bool UsingSpt { get; private set; }
 	public bool UsingSptButNeverRun { get; private set; }
 	public bool UsingBepInEx { get; private set; }
+	public bool HasManagedRuntime { get; private set; }
+	public bool UsingIl2Cpp { get; private set; }
+	public string? SptData { get; private set; }
 	public string Location { get; }
 	public string DisplayString { get; private set; } = string.Empty;
 
@@ -48,8 +51,19 @@ internal class Installation
 	}
 
 	[SupportedOSPlatform("windows")]
-	public static Installation? GetTargetInstallation(string? path, string promptTitle)
+	public static Installation? GetTargetInstallation(string? path, string promptTitle, bool confirm = true)
 	{
+		if (path is not null && TryDiscoverInstallation(path, out var requested))
+		{
+			if (!confirm)
+				return requested;
+
+			return AnsiConsole.Confirm(
+				$"Continue with [green]EscapeFromTarkov ({requested.Version})[/] in [blue]{requested.Location.EscapeMarkup()}[/] ?")
+				? requested
+				: null;
+		}
+
 		var installations = new List<Installation>();
 
 		AnsiConsole
@@ -58,8 +72,6 @@ internal class Installation
 			{
 				installations = [.. DiscoverInstallations().Distinct()];
 
-				if (path is not null && TryDiscoverInstallation(path, out var installation))
-					installations.Add(installation);
 			});
 
 		installations = [.. installations.Distinct().OrderBy(i => i.Location)];
@@ -71,7 +83,7 @@ internal class Installation
 				return null;
 			case 1:
 				var first = installations.First();
-				return AnsiConsole.Confirm($"Continue with [green]EscapeFromTarkov ({first.Version})[/] in [blue]{first.Location.EscapeMarkup()}[/] ?") ? first : null;
+				return !confirm || AnsiConsole.Confirm($"Continue with [green]EscapeFromTarkov ({first.Version})[/] in [blue]{first.Location.EscapeMarkup()}[/] ?") ? first : null;
 			default:
 				var prompt = new SelectionPrompt<Installation> { Title = promptTitle };
 				prompt.AddChoices(installations);
@@ -139,12 +151,12 @@ internal class Installation
 				return false;
 
 			installation = new Installation(path, new Version(vi.FileVersion));
-
-			if (!Directory.Exists(installation.Managed))
-				return false;
-
-			// Starting with 4.0.0, folder layout changed
-			installation.UsingSpt = Directory.Exists(Path.Combine(path, "SPT_Data")) || Directory.Exists(Path.Combine(path, "SPT", "SPT_Data"));
+			installation.HasManagedRuntime = Directory.Exists(installation.Managed);
+			installation.UsingIl2Cpp =
+				File.Exists(Path.Combine(path, "GameAssembly.dll")) ||
+				Directory.Exists(Path.Combine(path, "EscapeFromTarkov_Data", "il2cpp_data"));
+			installation.SptData = FindSptDataDirectory(path);
+			installation.UsingSpt = installation.SptData != null;
 
 
 			var battleye = Path.Combine(path, "BattlEye");
@@ -156,10 +168,42 @@ internal class Installation
 
 			return true;
 		}
-		catch (IOException)
+		catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
 		{
 			return false;
 		}
+	}
+
+	private static string? FindSptDataDirectory(string path)
+	{
+		var directCandidates = new[]
+		{
+			Path.Combine(path, "SPT_Data"),
+			Path.Combine(path, "SPT", "SPT_Data"),
+			Path.Combine(path, "SPT_Runtime", "SPT_Data")
+		};
+
+		foreach (var candidate in directCandidates)
+		{
+			if (Directory.Exists(candidate))
+				return candidate;
+		}
+
+		try
+		{
+			foreach (var directory in Directory.EnumerateDirectories(path))
+			{
+				var candidate = Path.Combine(directory, "SPT_Data");
+				if (Directory.Exists(candidate))
+					return candidate;
+			}
+		}
+		catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+		{
+			// Discovery remains usable with the initial candidates.
+		}
+
+		return null;
 	}
 
 	private string ComputeDisplayString()
@@ -167,9 +211,7 @@ internal class Installation
 		var sb = new StringBuilder();
 		sb.Append($"{Location.EscapeMarkup()} - [[{Version}]] ");
 		sb.Append(UsingSpt ? "[b]SPT[/] " : "Vanilla ");
-
-		if (UsingSpt && VersionChecker.IsVersionSupported(Version))
-			sb.Append("[green](Supported)[/]");
+		sb.Append(UsingIl2Cpp ? "[red](IL2CPP)[/] " : "[green](Managed)[/] ");
 
 		return sb.ToString();
 	}
